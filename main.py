@@ -14,7 +14,7 @@ load_dotenv()
 app_token=os.environ.get("SLACK_APP_TOKEN")
 bot_token=os.environ.get("SLACK_BOT_TOKEN")
 base_url=os.environ.get("BASE_URL")
-endpoint=f"{base_url}/api/v1/"
+endpoint=f"{base_url}/api/v1/projects"
 channel_id=os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID")
 
 old_projects=None
@@ -73,7 +73,6 @@ def fetch_projects_by_status(status, reply_fn, logger):
             projects.extend(data.get("data", []))
             page=data.get("pagination", {}).get("next")
 
-            reply_fn(f"message") # message to be written
         elif response.status_code==400:
             reply_fn(f"Bad request: {response.json()}")
         else:
@@ -81,7 +80,11 @@ def fetch_projects_by_status(status, reply_fn, logger):
 
         projects.extend(data.get("data", []))
         page=data.get("pagination", {}).get("next")
+        print(f"Fetched {len(data.get('data', []))} projects from page {page}. Total so far: {len(projects)}.")
+        print(f"Next page: {page}")
+        print(len(projects))
 
+    reply_fn(f"Fetched {len(projects)} projects with status '{status}'.")
     return projects
 
 def get_queue_message(reply_fn, logger):
@@ -92,8 +95,8 @@ def handle_some_command(ack, respond, command, logger):
     ack()
     logger.info(f"Queue called by {command['user_name']}({command['user_id']}) in channel {command['channel_name']}({command['channel_id']}) using command {command['command']}")
 
-    message=get_queue_message(respond, logger)
-    respond(message)
+    projects = fetch_projects_by_status("pending", respond, logger)
+    respond(str(len(projects)))
 
 @app.event("app_mention")
 def handle_bot_ping(event, say, logger):
@@ -103,8 +106,8 @@ def handle_bot_ping(event, say, logger):
     def reply_in_thread(text):
         say(text, thread_ts=thread_timestamp)
 
-    message=get_queue_message(reply_in_thread, logger)
-    reply_in_thread(message)
+    projects = fetch_projects_by_status("pending", reply_in_thread, logger)
+    say(str(len(projects)))
 
 if __name__ == "__main__":
     SocketModeHandler(app, app_token).start()
