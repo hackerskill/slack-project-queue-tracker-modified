@@ -23,7 +23,7 @@ queue_empty_notifications=True
 
 app=App(token=bot_token)
 
-CACHE_TTL=180  # cache for 3 minutes 
+CACHE_TTL=300  # cache for 5 minutes 
 queue_cache={"data": None, "expires_at": 0}
 cache_lock=threading.Lock()
 
@@ -85,29 +85,52 @@ def fetch_projects_by_status(status, reply_fn, logger):
     logger.info(f"Fetched {len(projects)} projects with status '{status}'.")
     return projects
 
-def get_queue_message(reply_fn, logger):
+def get_data(reply_fn, logger):
     with cache_lock:
         now=time.time()
         if now < queue_cache["expires_at"]:
             age=int(now - (queue_cache["expires_at"] - CACHE_TTL))//60
             if age==0:
-                logger.info(f"Serving queue status from cache (< 1 min ago)")
-                message=f"There are currently {queue_cache['data']} pending projects in the queue._(Cached < 1 min ago)_"
+                queue_cache["data"]["age"]="< 1 min ago"
             else:
-                logger.info(f"Serving queue status from cache ({age}mins old)")
-                message=f"There are currently {queue_cache['data']} pending projects in the queue._(Cached {age}mins ago)_"
-            print(f"Cache data: {queue_cache['data']}, expires at: {queue_cache['expires_at']}, now: {now}")
+                queue_cache["data"]["age"]=f"{age} mins ago"
+
+            logger.info(f"Serving queue status from cache ({age})")
+
+            return queue_cache["data"]
         else:
             try:
-                projects=fetch_projects_by_status("pending", reply_fn, logger)
-                logger.info(f"Fetched queue status from API: {len(projects)} pending projects")
-                message=f"There are currently {len(projects)} pending projects in the queue."
-                queue_cache["data"]=len(projects)
+                pending=fetch_projects_by_status("pending", reply_fn, logger)
+#                unique_people=fetch_unique_people(reply_fn, logger)
+#                oldest_days=fetch_oldest_days(reply_fn, logger)
+                unique_people=0
+                oldest_days=0
+                logger.info(f"Fetched queue status from API: {len(pending)} pending projects")
+                queue_cache["data"]={
+                    "pending": len(pending),
+                    "unique_people": unique_people,
+                    "oldest_days": oldest_days,
+                    }
+                queue_cache["data"]["age"]="Just now(Live)"
                 queue_cache["expires_at"]=time.time() + CACHE_TTL
             except Exception as e:
                 logger.exception(f"Failed to fetch queue status: {e}")
-                message=f"Failed to fetch queue status: {e}"
+                reply_fn(f"Failed to fetch queue status: {e}")
 
+            return queue_cache["data"]
+
+def get_queue_message(reply_fn, logger):
+    data=get_data(reply_fn, logger)
+
+    if data is None:
+        return
+
+    message=(
+        f"Projects in queue: *{data['pending']}* \n"
+        f"Unique people waiting: *{data['unique_people']}*\n"
+        f"Oldest: *{data['oldest_days']} days*\n"
+        f"Updated: *{data['age']}*\n"
+    )
     reply_fn(message)
     return message
 
