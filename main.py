@@ -23,9 +23,9 @@ queue_empty_notifications=True
 
 app=App(token=bot_token)
 
-CACHE_TTL = 180  # cache for 3 minutes 
-queue_cache = {"data": None, "expires_at": 0}
-_cache_lock = threading.Lock()
+CACHE_TTL=180  # cache for 3 minutes 
+queue_cache={"data": None, "expires_at": 0}
+cache_lock=threading.Lock()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,9 +70,6 @@ def fetch_projects_by_status(status, reply_fn, logger):
                 logger.error(f"Invalid JSON: {response.text[:200]}")
                 raise RuntimeError("Server returned invalid JSON.")
 
-            projects.extend(data.get("data", []))
-            page=data.get("pagination", {}).get("next")
-
         elif response.status_code==400:
             reply_fn(f"Bad request: {response.json()}")
         else:
@@ -80,23 +77,46 @@ def fetch_projects_by_status(status, reply_fn, logger):
 
         projects.extend(data.get("data", []))
         page=data.get("pagination", {}).get("next")
+
         print(f"Fetched {len(data.get('data', []))} projects from page {page}. Total so far: {len(projects)}.")
         print(f"Next page: {page}")
         print(len(projects))
 
-    reply_fn(f"Fetched {len(projects)} projects with status '{status}'.")
+    logger.info(f"Fetched {len(projects)} projects with status '{status}'.")
     return projects
 
 def get_queue_message(reply_fn, logger):
-    pass # to be implemented
+    with cache_lock:
+        now=time.time()
+        if now < queue_cache["expires_at"]:
+            age=int(now - (queue_cache["expires_at"] - CACHE_TTL))//60
+            if age==0:
+                logger.info(f"Serving queue status from cache (< 1 min ago)")
+                message=f"There are currently {queue_cache['data']} pending projects in the queue._(Cached < 1 min ago)_"
+            else:
+                logger.info(f"Serving queue status from cache ({age}mins old)")
+                message=f"There are currently {queue_cache['data']} pending projects in the queue._(Cached {age}mins ago)_"
+            print(f"Cache data: {queue_cache['data']}, expires at: {queue_cache['expires_at']}, now: {now}")
+        else:
+            try:
+                projects=fetch_projects_by_status("pending", reply_fn, logger)
+                logger.info(f"Fetched queue status from API: {len(projects)} pending projects")
+                message=f"There are currently {len(projects)} pending projects in the queue."
+                queue_cache["data"]=len(projects)
+                queue_cache["expires_at"]=time.time() + CACHE_TTL
+            except Exception as e:
+                logger.exception(f"Failed to fetch queue status: {e}")
+                message=f"Failed to fetch queue status: {e}"
+
+    reply_fn(message)
+    return message
 
 @app.command("/forge")
 def handle_some_command(ack, respond, command, logger):
     ack()
     logger.info(f"Queue called by {command['user_name']}({command['user_id']}) in channel {command['channel_name']}({command['channel_id']}) using command {command['command']}")
 
-    projects = fetch_projects_by_status("pending", respond, logger)
-    respond(str(len(projects)))
+    get_queue_message(respond, logger)
 
 @app.event("app_mention")
 def handle_bot_ping(event, say, logger):
@@ -106,8 +126,7 @@ def handle_bot_ping(event, say, logger):
     def reply_in_thread(text):
         say(text, thread_ts=thread_timestamp)
 
-    projects = fetch_projects_by_status("pending", reply_in_thread, logger)
-    say(str(len(projects)))
+    get_queue_message(reply_in_thread, logger)
 
 if __name__ == "__main__":
     SocketModeHandler(app, app_token).start()
