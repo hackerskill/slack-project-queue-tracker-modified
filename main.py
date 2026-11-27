@@ -114,7 +114,7 @@ def get_data(reply_fn, logger):
             else:
                 queue_cache["data"]["age"]=f"{age} mins ago"
 
-            logger.info(f"Serving queue status from cache ({age}): {len(pending)} pending projects")
+            logger.info(f"Serving queue status from cache ({age}): {queue_cache['data']['pending']} pending projects")
 
             return queue_cache["data"]
         else:
