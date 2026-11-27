@@ -29,7 +29,11 @@ cache_lock=threading.Lock()
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("queue_tracker.log"),
+        logging.StreamHandler()
+    ]
 )
 
 def fetch_projects_by_status(status, reply_fn, logger):
@@ -78,27 +82,16 @@ def fetch_projects_by_status(status, reply_fn, logger):
         projects.extend(data["data"])
         page=data["pagination"]["next"]
 
-        print(f"Fetched {len(data['data'])} projects from page {page}. Total so far: {len(projects)}.")
-        print(f"Next page: {page}")
-        print(len(projects))
-
-    logger.info(f"Fetched {len(projects)} projects with status '{status}'.")
     return projects
 
-def fetch_unique_people(reply_fn, logger, pending_projects=None):
-    try:
-        unique_people=set()
-        for project in pending_projects:
-            if "user" in project and "id" in project["user"]:
-                unique_people.add(project["user"]["id"])
-        logger.info(f"Fetched {len(unique_people)} unique people waiting for projects.")
-        return len(unique_people)
-    except Exception as e:
-        logger.exception(f"Failed to fetch unique people: {e}")
-        reply_fn(f"Failed to fetch unique people: {e}")
-        return None
+def fetch_unique_people(pending_projects=None):
+    unique_people=set()
+    for project in pending_projects:
+        if "user" in project and "id" in project["user"]:
+            unique_people.add(project["user"]["id"])
+    return len(unique_people)
 
-def fetch_oldest_days(reply_fn, logger, pending_projects=None):
+def fetch_oldest_days(pending_projects=None):
     current_date=datetime.now(timezone.utc)
     oldest_date=None
 
@@ -121,18 +114,20 @@ def get_data(reply_fn, logger):
             else:
                 queue_cache["data"]["age"]=f"{age} mins ago"
 
-            logger.info(f"Serving queue status from cache ({age})")
+            logger.info(f"Serving queue status from cache ({age}): {len(pending)} pending projects")
 
             return queue_cache["data"]
         else:
             try:
                 pending=fetch_projects_by_status("pending", reply_fn, logger)
-                unique_people=fetch_unique_people(reply_fn, logger, pending)
-                oldest_days=fetch_oldest_days(reply_fn, logger, pending)
+                pending_pitches=fetch_projects_by_status("pitch_pending", reply_fn, logger)
+                unique_people=fetch_unique_people(pending)
+                oldest_days=fetch_oldest_days(pending)
                 logger.info(f"Fetched queue status from API: {len(pending)} pending projects")
                 queue_cache["data"]={
                     "pending": len(pending),
                     "unique_people": unique_people,
+                    "pending_pitches": len(pending_pitches),
                     "oldest_days": oldest_days,
                     }
                 queue_cache["data"]["age"]="Just now(Live)"
@@ -152,6 +147,7 @@ def get_queue_message(reply_fn, logger):
     message=(
         f"Projects in queue: *{data['pending']}* \n"
         f"Unique people waiting: *{data['unique_people']}*\n"
+        f"Pending pitches: *{data['pending_pitches']}*\n"
         f"Oldest Waiting: *{data['oldest_days']} days*\n"
         f"Updated: *{data['age']}*\n"
     )
