@@ -2,7 +2,7 @@ import os
 import threading
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import json
 from dotenv import load_dotenv
@@ -75,15 +75,41 @@ def fetch_projects_by_status(status, reply_fn, logger):
         else:
             reply_fn(f"Unexpected error: {response.status_code}, {response.json()}")
 
-        projects.extend(data.get("data", []))
-        page=data.get("pagination", {}).get("next")
+        projects.extend(data["data"])
+        page=data["pagination"]["next"]
 
-        print(f"Fetched {len(data.get('data', []))} projects from page {page}. Total so far: {len(projects)}.")
+        print(f"Fetched {len(data['data'])} projects from page {page}. Total so far: {len(projects)}.")
         print(f"Next page: {page}")
         print(len(projects))
 
     logger.info(f"Fetched {len(projects)} projects with status '{status}'.")
     return projects
+
+def fetch_unique_people(reply_fn, logger, pending_projects=None):
+    try:
+        unique_people=set()
+        for project in pending_projects:
+            if "user" in project and "id" in project["user"]:
+                unique_people.add(project["user"]["id"])
+        logger.info(f"Fetched {len(unique_people)} unique people waiting for projects.")
+        return len(unique_people)
+    except Exception as e:
+        logger.exception(f"Failed to fetch unique people: {e}")
+        reply_fn(f"Failed to fetch unique people: {e}")
+        return None
+
+def fetch_oldest_days(reply_fn, logger, pending_projects=None):
+    current_date=datetime.now(timezone.utc)
+    oldest_date=None
+
+    for project in pending_projects:
+        ts=project["updated_at"]
+
+        date=datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if oldest_date is None or date < oldest_date:
+            oldest_date=date
+
+    return (current_date - oldest_date).days
 
 def get_data(reply_fn, logger):
     with cache_lock:
@@ -101,10 +127,8 @@ def get_data(reply_fn, logger):
         else:
             try:
                 pending=fetch_projects_by_status("pending", reply_fn, logger)
-#                unique_people=fetch_unique_people(reply_fn, logger)
-#                oldest_days=fetch_oldest_days(reply_fn, logger)
-                unique_people=0
-                oldest_days=0
+                unique_people=fetch_unique_people(reply_fn, logger, pending)
+                oldest_days=fetch_oldest_days(reply_fn, logger, pending)
                 logger.info(f"Fetched queue status from API: {len(pending)} pending projects")
                 queue_cache["data"]={
                     "pending": len(pending),
@@ -128,7 +152,7 @@ def get_queue_message(reply_fn, logger):
     message=(
         f"Projects in queue: *{data['pending']}* \n"
         f"Unique people waiting: *{data['unique_people']}*\n"
-        f"Oldest: *{data['oldest_days']} days*\n"
+        f"Oldest Waiting: *{data['oldest_days']} days*\n"
         f"Updated: *{data['age']}*\n"
     )
     reply_fn(message)
